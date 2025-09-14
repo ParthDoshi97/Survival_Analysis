@@ -1,0 +1,414 @@
+---
+title: "Survival Analysis of the Free Light Chain (FLC) Dataset"
+author: "Your Name Here"
+date: "September 14, 2025"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: '3'
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 7, fig.height = 5)
+```
+
+```{r}
+#=============================================
+#                  setup 
+#=============================================
+# A function to install and load packages
+install_and_load <- function(packages) {
+  for (pkg in packages) {
+    if (!require(pkg, character.only = TRUE)) {
+      install.packages(pkg, dependencies = TRUE)
+      library(pkg, character.only = TRUE)
+    }
+  }
+}
+
+# Define the packages required for the analysis
+pkgs <- c(
+  "tidyverse", "survival", "survminer", "broom", "broom.helpers",
+  "timeROC", "gtsummary", "mice", "matrixStats"
+)
+install_and_load(pkgs)
+
+# Set a seed for reproducibility
+set.seed(42)
+
+# Global variables and paths
+data_path <- "C:/Users/user/OneDrive/Documents/GitHub/Survival_Analysis/Data/flchain.csv" # Assumes flchain.csv is in the working directory
+outputs_dir <- "outputs"
+figures_dir <- "figures"
+if (!dir.exists(outputs_dir)) dir.create(outputs_dir)
+if (!dir.exists(figures_dir)) dir.create(figures_dir)
+```
+
+```{r}
+#=============================================
+# Data loading and cleaning 
+#=============================================
+# Load data from the survival package and write to CSV for demonstration
+# data(flchain, package = "survival")
+# write.csv(flchain, data_path, row.names = FALSE)
+
+# Load the data from the CSV file
+raw_data <- read.csv(data_path)
+
+# Data cleaning and derivation
+dat_clean <- raw_data %>%
+  as_tibble() %>%
+  clean_names() %>%
+  mutate(
+    # Convert event to a factor for clarity
+    death = factor(death, levels = c(0, 1), labels = c("Censored", "Event")),
+
+    # Time to months for easier interpretation of results
+    time_months = futime / 30.4375,
+
+    # Log transform FLC values and ratio to normalize skewed distributions
+    kappa_log = log(kappa + 1e-6),
+    lambda_log = log(lambda + 1e-6),
+    flc_ratio = (kappa + 1e-6) / (lambda + 1e-6),
+    flc_ratio_log = log(flc_ratio),
+
+    # Create clinically relevant FLC ratio groups
+    flc_ratio_grp = case_when(
+      flc_ratio < 0.26  ~ "Lambda-dominant",
+      flc_ratio > 1.65  ~ "Kappa-dominant",
+      TRUE              ~ "Normal ratio"
+    ) %>% factor(levels = c("Normal ratio", "Kappa-dominant", "Lambda-dominant")),
+
+    # Convert other variables to factors
+    sex = factor(sex, levels = c("F", "M"), labels = c("Female", "Male")),
+    mgus = factor(mgus, levels = c(0, 1), labels = c("No", "Yes"))
+  )
+
+
+str(dat_clean)
+
+# Count missing values for each column
+sapply(flchain, function(x) sum(is.na(x)))
+
+# Or, use a more verbose method
+library(dplyr)
+flchain %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "missing_count")
+```
+
+```{r}
+# Keep a unique identifier and the missingness indicator before imputation
+dat_clean <- dat_clean %>%
+  mutate(row_id = row_number(),
+         creat_was_missing = as.integer(is.na(creatinine)))
+
+# Keep only variables needed for imputing creatinine
+vars_mi <- c("row_id", "time_months", "death", "age", "sex", "flc_ratio_log", "creatinine")
+temp_data <- dat_clean %>% select(all_of(vars_mi))
+
+# Perform MICE imputation (rest of your existing code)
+imputed_data <- mice(temp_data, m = 5, printFlag = FALSE)
+
+# Extract the completed creatinine data from the first imputation
+imputed_creatinine_df <- complete(imputed_data, 1) %>%
+  select(row_id, creatinine_imputed = creatinine)
+
+# Merge the imputed creatinine back into the original dataset
+dat_final <- dat_clean %>%
+  # Use left_join to add the imputed column
+  left_join(imputed_creatinine_df, by = "row_id") %>%
+  # Use the imputed values where creatinine was originally missing
+  mutate(creatinine = coalesce(creatinine, creatinine_imputed)) %>%
+  # Drop the extra columns used for the merge
+  select(-row_id, -creatinine_imputed)
+
+# Now, dat_final contains all original columns and the imputed creatinine values,
+# along with the 'creat_was_missing' column for validation
+sum(is.na(dat_final$creatinine)) # Should be 0
+str(dat_final) # All your original columns are still present
+```
+
+```{r}
+# Filter for observed and imputed values
+observed_creatinine <- dat_final %>% 
+  filter(creat_was_missing == 0) %>% 
+  select(creatinine) %>% 
+  mutate(Source = 'Observed')
+
+imputed_creatinine <- dat_final %>% 
+  filter(creat_was_missing == 1) %>% 
+  select(creatinine) %>% 
+  mutate(Source = 'Imputed')
+
+# Combine the data frames for plotting
+validation_data <- bind_rows(observed_creatinine, imputed_creatinine)
+
+# Create a density plot to compare the distributions
+p_creatinine_imputation_check <- ggplot(validation_data, aes(x = creatinine, color = Source)) +
+  geom_density(linewidth = 1.2) + # Use geom_density with color and no fill
+  labs(title = 'Distribution of Observed vs. Imputed Creatinine',
+       x = 'Creatinine (mg/dL)',
+       y = 'Density') +
+  theme_minimal() +
+  theme(legend.position = 'top')
+
+# Print the plot
+print(p_creatinine_imputation_check)
+
+# To save the plot for your report, uncomment the following line
+ggsave('outputs/imputation_validation_creatinine.png', plot = p_creatinine_imputation_check, 
+        width = 7, height = 5, dpi = 300)
+```
+
+```{r}
+# Create a summary table using gtsummary
+dat_final %>%
+  select(age, sex, creatinine, mgus, kappa, lambda, flc_ratio, time_months, death) %>%
+  tbl_summary(
+    by = sex,
+    label = list(
+      age ~ "Age (years)",
+      creatinine ~ "Creatinine (mg/dL)",
+      kappa ~ "Kappa (mg/L)",
+      lambda ~ "Lambda (mg/L)",
+      flc_ratio ~ "FLC Ratio",
+      time_months ~ "Follow-up Time (months)",
+      death ~ "Death"
+    ),
+    statistic = list(all_continuous() ~ "{mean} ({sd})", all_categorical() ~ "{n} ({p}%)")
+  ) %>%
+  as_gt() %>%
+  gt::gtsave("descriptive_summary.html", path = outputs_dir)
+# Create the summary table
+tbl <- dat_final %>%
+  select(age, sex, creatinine, mgus, flc_ratio, flc_ratio_grp) %>%
+  tbl_summary(
+    by = flc_ratio_grp,
+    label = list(
+      age = "Age, years",
+      sex = "Sex",
+      creatinine = "Creatinine, mg/dL",
+      mgus = "MGUS status",
+      flc_ratio = "FLC ratio"
+    ),
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    )
+  ) %>%
+  add_p() %>%
+  add_overall() %>%
+  modify_footnote(
+    update = everything() ~ "Mean (SD) for continuous variables; n (%) for categorical variables."
+  ) %>%
+  modify_header(
+    label = "**Characteristic**",
+    stat_by = "**{level}**<br>N = {n}"
+  ) %>%
+  bold_labels()
+
+# Convert the gtsummary object to a gt object and then save
+tbl %>%
+  as_gt() %>%
+  gtsave("outputs/table1_by_flc_ratio_group.html")
+```
+
+```{r}
+# Histogram for age
+ggplot(dat_final, aes(x = age)) +
+  geom_histogram(binwidth = 5, fill = "skyblue", color = "black") +
+  labs(title = "Age Distribution", x = "Age (Years)", y = "Count") +
+  theme_minimal()
+
+# Histogram for creatinine
+ggplot(dat_final, aes(x = creatinine)) +
+  geom_histogram(binwidth = 0.1, fill = "coral", color = "black") +
+  labs(title = "Creatinine Distribution", x = "Creatinine (mg/dL)", y = "Count") +
+  theme_minimal()
+
+# Histogram for log-transformed FLC ratio
+ggplot(dat_final, aes(x = flc_ratio_log)) +
+  geom_histogram(fill = "lightgreen", color = "black") +
+  labs(title = "Distribution of Log-transformed FLC Ratio", x = "Log(FLC Ratio)", y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+dat_survival <- dat_final %>%
+  # Use a safer method to convert 'death' to a numeric (0/1) variable
+  mutate(death_status = ifelse(death == "Event", 1, 0)) %>%
+  # Select ONLY the variables needed for the plot and model
+  select(time_months, death_status, flc_ratio_grp) %>%
+  # Ensure the grouping variable is a factor
+  mutate(flc_ratio_grp = as.factor(flc_ratio_grp))
+
+# Create a survival object using the clean data frame
+surv_obj <- Surv(time = dat_survival$time_months, event = dat_survival$death_status)
+
+# Fit the Kaplan-Meier model on the clean data
+fit_flc_ratio <- survfit(surv_obj ~ flc_ratio_grp, data = dat_survival)
+
+# Use surv_summary() to extract the data for plotting
+fit_data <- surv_summary(fit_flc_ratio)
+
+# Get the p-value from the log-rank test
+p_value <- surv_pvalue(fit_flc_ratio)$pval
+
+# Create the text label for the p-value
+p_value_label <- paste0("p = ", format.pval(p_value, digits = 4))
+
+# Now, plot the data using ggplot
+p_km_ggplot <- ggplot(fit_data, aes(x = time, y = surv, color = strata)) +
+  # Plot the survival curves as steps
+  geom_step(size = 1) +
+  # Add the confidence intervals as a shaded ribbon
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = strata), alpha = 0.2, linetype = 0) +
+  # Customize the plot appearance
+  labs(
+    title = "Kaplan-Meier Survival Curves by FLC Ratio Group",
+    x = "Time (months)",
+    y = "Survival Probability",
+    color = "FLC Ratio Group",
+    fill = "FLC Ratio Group"
+  ) +
+  annotate("text", x = 20, y = 0.55, label = p_value_label, size = 5) +
+  theme_bw() +
+  scale_y_continuous(labels = scales::percent)
+
+# Print the plot
+print(p_km_ggplot)
+```
+
+```{r}
+# Step 1: Create a clean data frame with all the variables
+# This is the most crucial step to ensure consistency
+dat_for_cox <- dat_final %>%
+  # Use a robust method to convert 'death' to a numeric (0/1) variable
+  mutate(
+    death_status = ifelse(death == "Event", 1, 0),
+    # Create the log-transformed creatinine variable for the model
+    creatinine_log = log(creatinine)
+  ) %>%
+  # Select ONLY the variables needed for the plot and model
+  select(
+    time_months, death_status, flc_ratio_grp,
+    age, sex, creatinine_log, mgus
+  ) %>%
+  # Ensure all variables are correctly formatted (e.g., factors)
+  mutate(
+    flc_ratio_grp = as.factor(flc_ratio_grp),
+    sex = as.factor(sex),
+    mgus = as.factor(mgus)
+  )
+
+# Step 2: Fit the Cox Proportional Hazards model
+cox_model <- coxph(
+  Surv(time_months, death_status) ~ flc_ratio_grp + age + sex + creatinine_log + mgus,
+  data = dat_for_cox
+)
+
+# Step 3: Extract the data from the model object
+# The broom::tidy() function is perfect for this.
+model_data <- tidy(cox_model, conf.int = TRUE, exponentiate = TRUE)
+
+# Step 4: Manually create the ggplot forest plot
+p_forest <- ggplot(model_data, aes(x = estimate, y = term)) +
+  # Add the Hazard Ratio (point estimate)
+  geom_point(size = 3) +
+  # Add the confidence interval as error bars
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  # Add a vertical line at HR = 1 for reference
+  geom_vline(xintercept = 1, linetype = "dashed", color = "grey50") +
+  # Customize the plot appearance
+  labs(
+    title = "Hazard Ratios from Multivariate Cox Model",
+    x = "Hazard Ratio",
+    y = "Predictor"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    axis.title.x = element_text(face = "bold")
+  )
+
+# Print the plot
+print(p_forest)
+```
+
+```{r}
+# Test the Proportional Hazards assumption
+cox_zph_test <- cox.zph(cox_model)
+print(cox_zph_test)
+
+# Step 2: Run the Schoenfeld residuals test on the full model
+cox_zph_test <- cox.zph(cox_model)
+
+ggcoxzph(
+  cox_zph_test,
+  # Make points smaller and more transparent to reduce clutter
+  point.size = 0.8,
+  point.alpha = 0.4,
+  point.col = "lightcoral",
+  
+  # A more flexible fitted line
+  df = 4,
+  
+  # A clean, professional theme
+  ggtheme = theme_classic(),
+  
+  # Customize fonts and labels using arguments passed to ggpar
+  font.x = c(10, "bold", "black"),
+  font.y = c(10, "bold", "black"),
+  font.main = c(10, "bold"),
+  
+  # Add a specific subtitle to clarify the plot's purpose
+  subtitle = "Test of Proportional Hazards Assumption",
+  
+  # Arrange panels in 2 columns for better readability
+  ncol = 2
+)
+
+
+
+```
+```{r}
+# Step 1: Ensure your data is clean and correctly formatted for survival analysis
+dat_for_roc <- dat_final %>%
+  # Create a numeric (0/1) death status variable from the 'death' factor
+  mutate(death_status = as.integer(death == "Event"))
+
+# Step 2: Calculate the risk score from the Cox model
+dat_for_roc$risk_score <- predict(cox_model, type = "lp")
+
+# Step 3: Build a time-dependent ROC curve using the corrected data
+td_roc <- timeROC(
+  T = dat_for_roc$time_months,
+  delta = dat_for_roc$death_status,
+  marker = dat_for_roc$risk_score,
+  cause = 1,
+  weighting = "marginal",
+  times = c(12, 24, 36),
+  ROC = TRUE
+)
+
+# Get the index of the time point that is closest to 24
+time_index <- which.min(abs(td_roc$times - 24))
+
+# Step 4: Plot the ROC curve for 24 months
+plot(td_roc, time = 24, col = "#1874CD", title = FALSE, lwd = 2)
+abline(a = 0, b = 1, lty = 2, col = "grey", lwd = 1)
+
+# Step 5: The legend and print statements will now work
+legend("bottomright",
+       legend = paste("AUC at 24 months:", round(td_roc$AUC[time_index], 2)),
+       bty = "n", cex = 1.2)
+
+# Print the AUC values for each time point
+print(td_roc$AUC)
+```
