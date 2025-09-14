@@ -1,15 +1,18 @@
 ---
-title: "Survival Analysis of the Free Light Chain (FLC) Dataset"
-author: "Your Name Here"
-date: "September 14, 2025"
+title: "Survival Analysis of Serum Free Light Chains (flchain)"
+author: "Parth Doshi"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
 output:
-  pdf_document:
-    toc: true
-    toc_depth: '3'
   html_document:
     toc: true
-    toc_depth: 3
-    theme: cosmo
+    toc_float: true
+    number_sections: true
+    df_print: paged
+  pdf_document:
+    toc: true
+    number_sections: true
+editor_options:
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -17,9 +20,8 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width =
 ```
 
 ```{r}
-#=============================================
-#                  setup 
-#=============================================
+# ============== load Pacakges ===============
+
 # A function to install and load packages
 install_and_load <- function(packages) {
   for (pkg in packages) {
@@ -33,7 +35,7 @@ install_and_load <- function(packages) {
 # Define the packages required for the analysis
 pkgs <- c(
   "tidyverse", "survival", "survminer", "broom", "broom.helpers",
-  "timeROC", "gtsummary", "mice", "matrixStats"
+  "timeROC", "gtsummary", "mice", "matrixStats", "gt"
 )
 install_and_load(pkgs)
 
@@ -48,10 +50,34 @@ if (!dir.exists(outputs_dir)) dir.create(outputs_dir)
 if (!dir.exists(figures_dir)) dir.create(figures_dir)
 ```
 
+# Why this analysis?
+
+Serum free light chains (FLC)—the kappa and lambda components of immunoglobulins—have been suggested as markers of immune dysregulation and overall health. Prior work in a large Olmsted County cohort reported that elevated FLC levels predict higher all-cause mortality. Here, we reproduce and extend a **time‑to‑event (survival)** analysis using the `flchain` dataset in the **`survival`** R package to:
+
+-   quantify the association between FLC measures and mortality,
+-   adjust for key confounders (age, sex, creatinine, MGUS, calendar year),
+-   check model assumptions and robustness, and
+-   generate publication‑ready figures/tables.
+
+# Data source (flchain)
+
+We use the `flchain` dataset: a stratified random sample of **7,874** adults (≥50 years) from Olmsted County. Variables include age, sex, sample year, FLC kappa and lambda, FLC group used in the original paper, creatinine, MGUS diagnosis, follow‑up time (`futime`, days), vital status (`death`), and (for decedents) a broad cause‑of‑death chapter code.
+
+> **Citation & provenance.** Data: `data(flchain, package = "survival")`. Primary sources: Dispenzieri *et al.*, Mayo Clinic Proc. 2012; Kyle *et al.*, NEJM 2006. See **References**.
+
+**Key variables** (brief): - `age` (years), `sex` (F/M) - `sample.yr` (calendar year of blood draw) - `kappa`, `lambda` (serum free light chains) - `flc.grp` (FLC grouping from original analysis) - `creatinine` (serum creatinine) - `mgus` (1 if MGUS diagnosed) - `futime` (days from enrollment to death/last contact) - `death` (1 = dead, 0 = alive at last contact) - `chapter` (ICD‑9 chapter for those who died; \~only observed among decedents and has high missingness by design)
+
+# Analysis plan
+
+**Questions.** 1. Do higher FLC levels associate with increased mortality risk? 2. Are associations independent of age, sex, kidney function (creatinine), MGUS, and calendar year? 3. Do effects vary by FLC components (kappa vs. lambda) or their ratio?
+
+**Methods overview.** - Define a survival object `Surv(futime, death)`. - Exploratory data analysis (distributions, transformations). - Non‑parametric survival comparisons (Kaplan–Meier, log‑rank) by FLC group. - Semi‑parametric modeling (Cox proportional hazards) with covariate adjustment. - Diagnostics: proportional hazards (PH) via Schoenfeld residuals; functional form via splines. - Sensitivity: use FLC ratio and log‑transformed FLCs. - Report hazard ratios (HR) with 95% CIs; model discrimination via concordance.
+
+> **Note on missingness.** `chapter` is only defined for deaths and has ≈70%+ missing overall; it is **not** used as a predictor. For other covariates, we’ll describe missingness and (optionally) show a multiple imputation recipe for covariates only (outcomes are not imputed).
+
+# Load packages and data
+
 ```{r}
-#=============================================
-# Data loading and cleaning 
-#=============================================
 # Load data from the survival package and write to CSV for demonstration
 # data(flchain, package = "survival")
 # write.csv(flchain, data_path, row.names = FALSE)
@@ -62,7 +88,6 @@ raw_data <- read.csv(data_path)
 # Data cleaning and derivation
 dat_clean <- raw_data %>%
   as_tibble() %>%
-  clean_names() %>%
   mutate(
     # Convert event to a factor for clarity
     death = factor(death, levels = c(0, 1), labels = c("Censored", "Event")),
@@ -88,7 +113,11 @@ dat_clean <- raw_data %>%
     mgus = factor(mgus, levels = c(0, 1), labels = c("No", "Yes"))
   )
 
+```
 
+# Quick data audit
+
+```{r}
 str(dat_clean)
 
 # Count missing values for each column
@@ -100,6 +129,13 @@ flchain %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "missing_count")
 ```
+
+**Note.** `chapter` will appear highly missing because it exists primarily for those with `death == 1`. We won’t use it as a predictor.
+
+# Imputation of missing creatinine
+
+To avoid bias from missing serum creatinine values, we use **multiple imputation** (`mice`).\
+We retain: - a **row identifier** (`row_id`) to merge back results, - and a **creatinine missingness indicator** (`creat_was_missing`) for sensitivity checks.
 
 ```{r}
 # Keep a unique identifier and the missingness indicator before imputation
@@ -133,6 +169,10 @@ sum(is.na(dat_final$creatinine)) # Should be 0
 str(dat_final) # All your original columns are still present
 ```
 
+# Validation of imputation
+
+We compare **observed** vs. **imputed creatinine** values using density plots.
+
 ```{r}
 # Filter for observed and imputed values
 observed_creatinine <- dat_final %>% 
@@ -165,6 +205,12 @@ ggsave('outputs/imputation_validation_creatinine.png', plot = p_creatinine_imput
         width = 7, height = 5, dpi = 300)
 ```
 
+# Descriptive statistics and EDA
+
+We provide two descriptive tables using **gtsummary** and several exploratory plots. Table A compares characteristics by **sex**; Table B compares by **FLC ratio quartiles**.
+
+# Table A: Characteristics by sex
+
 ```{r}
 # Create a summary table using gtsummary
 dat_final %>%
@@ -184,6 +230,11 @@ dat_final %>%
   ) %>%
   as_gt() %>%
   gt::gtsave("descriptive_summary.html", path = outputs_dir)
+```
+
+# Table B: Characteristics by FLC ratio quartile
+
+```{r}
 # Create the summary table
 tbl <- dat_final %>%
   select(age, sex, creatinine, mgus, flc_ratio, flc_ratio_grp) %>%
@@ -218,6 +269,8 @@ tbl %>%
   gtsave("outputs/table1_by_flc_ratio_group.html")
 ```
 
+# EDA Plots
+
 ```{r}
 # Histogram for age
 ggplot(dat_final, aes(x = age)) +
@@ -239,6 +292,32 @@ ggplot(dat_final, aes(x = flc_ratio_log)) +
 ```
 
 ```{r}
+# Distributions of FLCs (on raw and log scales)
+p1 <- ggplot(dat_final, aes(kappa)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("Kappa")
+p2 <- ggplot(dat_final, aes(lambda)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("Lambda")
+p3 <- ggplot(dat_final, aes(kappa_log)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("log(Kappa)")
+p4 <- ggplot(dat_final, aes(lambda_log)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("log(Lambda)")
+p5 <- ggplot(dat_final, aes(flc_ratio_log)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("FLC ratio (kappa/lambda)")
+
+p1; p2; p3; p4; p5
+```
+
+```{r eda2}
+# Compare creatinine by vital status
+ggplot(dat_final, aes(x = mgus, y = creatinine, fill = mgus)) +
+  geom_boxplot() + theme_minimal() + ggtitle("Creatinine by MGUS")
+```
+
+```{r eda3}
+# Age distribution by death
+ggplot(dat_final, aes(age, fill = factor(death))) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 40) +
+  theme_minimal() + labs(fill = "Death", title = "Age by vital status")
+```
+
+# Create the survival object and prepare Data
+
+```{r}
 dat_survival <- dat_final %>%
   # Use a safer method to convert 'death' to a numeric (0/1) variable
   mutate(death_status = ifelse(death == "Event", 1, 0)) %>%
@@ -249,6 +328,12 @@ dat_survival <- dat_final %>%
 
 # Create a survival object using the clean data frame
 surv_obj <- Surv(time = dat_survival$time_months, event = dat_survival$death_status)
+
+```
+
+# Kaplan–Meier curves by FLC group
+
+```{r}
 
 # Fit the Kaplan-Meier model on the clean data
 fit_flc_ratio <- survfit(surv_obj ~ flc_ratio_grp, data = dat_survival)
@@ -276,13 +361,17 @@ p_km_ggplot <- ggplot(fit_data, aes(x = time, y = surv, color = strata)) +
     color = "FLC Ratio Group",
     fill = "FLC Ratio Group"
   ) +
-  annotate("text", x = 20, y = 0.55, label = p_value_label, size = 5) +
+  annotate("text", x = 30, y = 0.55, label = p_value_label, size = 5) +
   theme_bw() +
   scale_y_continuous(labels = scales::percent)
 
 # Print the plot
 print(p_km_ggplot)
 ```
+
+# Cox proportional hazards models
+
+We begin with a core model using age, sex, calendar year, creatinine, MGUS, and log‑transformed FLC components. (Log transforms reduce skew.)
 
 ```{r}
 # Step 1: Create a clean data frame with all the variables
@@ -339,7 +428,15 @@ p_forest <- ggplot(model_data, aes(x = estimate, y = term)) +
 
 # Print the plot
 print(p_forest)
+
+# Pretty table
+tbl_regression(cox_model, exponentiate = TRUE) %>%
+  modify_caption("**Cox PH model: core covariates + log(FLC)**")
 ```
+
+**Interpretation.** Exponentiated coefficients are hazard ratios (HR). For example, `HR > 1` per one‑unit increase in `log_kappa` indicates higher instantaneous risk of death, holding other covariates constant.
+
+## PH assumption checks
 
 ```{r}
 # Test the Proportional Hazards assumption
@@ -373,10 +470,18 @@ ggcoxzph(
   # Arrange panels in 2 columns for better readability
   ncol = 2
 )
-
-
-
 ```
+
+-   Non‑significant global and per‑term tests support the PH assumption.
+-   If violations appear (e.g., `p < 0.05` and clear trends), consider:
+    -   stratification by the offending variable,
+    -   adding time‑by‑covariate interactions (time‑dependent effects),
+    -   or modeling with flexible parametric survival models.
+
+# Time-dependent ROC (discrimination over time)
+
+We compute time-dependent AUCs at 12, 24, and 36 months using **timeROC** based on the linear predictor from the multivariable Cox model.
+
 ```{r}
 # Step 1: Ensure your data is clean and correctly formatted for survival analysis
 dat_for_roc <- dat_final %>%
@@ -412,3 +517,26 @@ legend("bottomright",
 # Print the AUC values for each time point
 print(td_roc$AUC)
 ```
+
+# Limitations
+
+-   Observational cohort; residual confounding is possible.
+-   `chapter` is only defined for decedents; overall missingness is high by design and thus not used as a predictor.
+-   Single geographic region and age ≥50; generalizability may be limited.
+-   Biomarker assays and calibration choices (e.g., cut‑points in `flc.grp`) affect interpretability across studies.
+
+# Conclusions
+
+# Reproducibility
+
+```{r session}
+sessionInfo()
+```
+
+# References
+
+-   Dispenzieri A, Katzmann JA, Kyle RA, *et al.* (2012). **Use of monoclonal serum immunoglobulin free light chains to predict overall survival in the general population.** *Mayo Clinic Proceedings* 87:512–523.
+-   Kyle RA, Therneau TM, Rajkumar SV, *et al.* (2006). **Prevalence of monoclonal gammopathy of undetermined significance.** *New England Journal of Medicine* 354:1362–1369.
+-   Therneau TM. **A Package for Survival Analysis in R**. (Comprehensive R Archive Network).
+
+\`\`\`
