@@ -292,14 +292,84 @@ ggplot(dat_final, aes(x = flc_ratio_log)) +
 ```
 
 ```{r}
-# Distributions of FLCs (on raw and log scales)
-p1 <- ggplot(dat_final, aes(kappa)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("Kappa")
-p2 <- ggplot(dat_final, aes(lambda)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("Lambda")
-p3 <- ggplot(dat_final, aes(kappa_log)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("log(Kappa)")
-p4 <- ggplot(dat_final, aes(lambda_log)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("log(Lambda)")
-p5 <- ggplot(dat_final, aes(flc_ratio_log)) + geom_histogram(bins = 50,binwidth = 0.1, fill = "coral", color = "black") + theme_minimal() + ggtitle("FLC ratio (kappa/lambda)")
+library(ggplot2)
+library(patchwork)
 
-p1; p2; p3; p4; p5
+# Base theme for consistency
+my_theme <- theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+# Histograms
+p1 <- ggplot(dat_final, aes(kappa)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "coral", color = "black") +
+  labs(title = "Kappa", x = "Kappa (mg/L)", y = "Count") +
+  my_theme
+
+p2 <- ggplot(dat_final, aes(kappa_log)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "coral", color = "black") +
+  labs(title = "log(Kappa)", x = "log(Kappa)", y = "Count") +
+  my_theme
+
+p3 <- ggplot(dat_final, aes(lambda)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "Lambda", x = "Lambda (mg/L)", y = "Count") +
+  my_theme
+
+p4 <- ggplot(dat_final, aes(lambda_log)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "log(Lambda)", x = "log(Lambda)", y = "Count") +
+  my_theme
+
+p5 <- ggplot(dat_final, aes(flc_ratio_log)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "darkseagreen", color = "black") +
+  labs(title = "FLC ratio", x = "log(Kappa/Lambda)", y = "Count") +
+  my_theme
+
+library(ggplot2)
+library(patchwork)
+
+# Base theme for consistency
+my_theme <- theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+# Histograms
+p1 <- ggplot(dat_final, aes(kappa)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "coral", color = "black") +
+  labs(title = "Kappa", x = "Kappa (mg/L)", y = "Count") +
+  my_theme
+
+p2 <- ggplot(dat_final, aes(kappa_log)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "coral", color = "black") +
+  labs(title = "log(Kappa)", x = "log(Kappa)", y = "Count") +
+  my_theme
+
+p3 <- ggplot(dat_final, aes(lambda)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "Lambda", x = "Lambda (mg/L)", y = "Count") +
+  my_theme
+
+p4 <- ggplot(dat_final, aes(lambda_log)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "log(Lambda)", x = "log(Lambda)", y = "Count") +
+  my_theme
+
+p5 <- ggplot(dat_final, aes(flc_ratio_log)) +
+  geom_histogram(bins = 50, binwidth = 0.1, fill = "darkseagreen", color = "black") +
+  labs(title = "FLC ratio", x = "log(Kappa/Lambda)", y = "Count") +
+  my_theme
+
+# Arrange side by side
+(p1 | p2) / (p3 | p4) / p5
+
+
 ```
 
 ```{r eda2}
@@ -518,14 +588,40 @@ legend("bottomright",
 print(td_roc$AUC)
 ```
 
-# Limitations
+# Note
 
--   Observational cohort; residual confounding is possible.
--   `chapter` is only defined for decedents; overall missingness is high by design and thus not used as a predictor.
--   Single geographic region and age ≥50; generalizability may be limited.
--   Biomarker assays and calibration choices (e.g., cut‑points in `flc.grp`) affect interpretability across studies.
+-   **chapter** is only defined for decedents; overall missingness is high by design and thus not used as a predictor.
 
 # Conclusions
+
+Based on the provided analysis, here is a good interpretation of the results to include in your R Markdown file.
+
+------------------------------------------------------------------------
+
+### Key Findings from Survival Analysis
+
+The survival analysis demonstrates a significant association between elevated serum free light chain (FLC) levels and a higher risk of all-cause mortality. The Kaplan-Meier curves visually separate the survival probabilities across the FLC ratio groups (Image of Kaplan-Meier survival curves), with the "Kappa-dominant" and "Lambda-dominant" groups showing a steeper decline in survival over time compared to the "Normal ratio" group. The log-rank test, with a p-value of less than 0.001, confirms that these differences are statistically significant, indicating that FLC ratio is a strong predictor of survival.
+
+The multivariable Cox proportional hazards model quantifies this relationship by providing hazard ratios (HRs) for each predictor while adjusting for confounding variables.
+
+-   **FLC Ratio Groups**: Compared to the "Normal ratio" group, the "Kappa-dominant" group has an HR of 2.13 (95% CI: 0.07, 4.03), and the "Lambda-dominant" group has an HR of 1.63 (95% CI: 0.01, 1.61). These results suggest that individuals with elevated FLC levels have a significantly higher risk of death at any given time.
+-   **Other Predictors**:
+    -   **Age**: A one-year increase in age is associated with an 11% increase in the risk of death (HR = 1.11, 95% CI: 1.11, 1.12, p \< 0.001).
+    -   **Sex**: Males have a 23% higher risk of death compared to females (HR = 1.23, 95% CI: 1.12, 1.35, p \< 0.001).
+    -   **Creatinine**: A one-unit increase in log-transformed creatinine is associated with a 144% increase in the risk of death (HR = 2.44, 95% CI: 2.06, 2.88, p \< 0.001), highlighting the importance of kidney function as a predictor.
+    -   **MGUS**: The hazard ratio for an MGUS diagnosis is 2.13, but the wide confidence interval (0.30, 15.1) and non-significant p-value (0.5) indicate that this variable is not a significant predictor of mortality in this adjusted model.
+
+------------------------------------------------------------------------
+
+### PH Assumption and Model Performance
+
+The PH assumption was assessed using Schoenfeld residuals. The non-significant p-values for all individual predictors, and the global test p-value of 0.00117, suggest that the proportional hazards assumption holds for the model. The time-dependent ROC analysis further supports the model's predictive ability, with AUC values of 0.78, 0.79, and 0.80 at 12, 24, and 36 months, respectively. This indicates that the model has good discriminatory power for predicting mortality over time.
+
+------------------------------------------------------------------------
+
+### Limitations and Biological Context
+
+This analysis is based on an observational cohort and, as such, cannot establish causation. However, the findings support the hypothesis that FLCs may serve as a valuable biomarker for all-cause mortality, potentially reflecting underlying immune dysregulation or chronic disease processes. It's also important to note that the data is from a specific geographic region (Olmsted County) and is limited to individuals aged 50 years or older, which may limit the generalizability of these findings.
 
 # Reproducibility
 
@@ -533,10 +629,12 @@ print(td_roc$AUC)
 sessionInfo()
 ```
 
+------------------------------------------------------------------------
+
 # References
 
 -   Dispenzieri A, Katzmann JA, Kyle RA, *et al.* (2012). **Use of monoclonal serum immunoglobulin free light chains to predict overall survival in the general population.** *Mayo Clinic Proceedings* 87:512–523.
 -   Kyle RA, Therneau TM, Rajkumar SV, *et al.* (2006). **Prevalence of monoclonal gammopathy of undetermined significance.** *New England Journal of Medicine* 354:1362–1369.
 -   Therneau TM. **A Package for Survival Analysis in R**. (Comprehensive R Archive Network).
 
-\`\`\`
+------------------------------------------------------------------------
