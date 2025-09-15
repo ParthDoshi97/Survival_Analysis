@@ -1,7 +1,3 @@
-I can definitely help with that. Here's a well-structured README file for your GitHub repository, based on the R Markdown output.
-
------
-
 # Survival Analysis of Serum Free Light Chains (flchain)
 
 This project performs a survival analysis on the `flchain` dataset from the `survival` R package to investigate the relationship between serum free light chain (FLC) levels and all-cause mortality. The analysis reproduces and extends the findings of the original study, examining how FLC levels, both individually and as a ratio, predict survival while adjusting for key demographic and clinical factors.
@@ -66,7 +62,7 @@ This model estimates the hazard of death as a function of the FLC ratio group, a
   - **Model Discrimination**: The time-dependent ROC analysis indicates that the model has **good discriminatory power** for predicting mortality, with AUC values of **0.78 at 12 months** and **0.80 at 36 months** .
 
 ## Survival Analysis Report
-[View Full Analysis]()
+[View Full Analysis](survival_analysis.html)
 
 ## Reproducibility
 
